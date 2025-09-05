@@ -5,37 +5,41 @@ import type { RoomState, Turn, Cell } from "../services/socket";
 
 export default function Game() {
   const { roomId = "" } = useParams();
-  const { state } = useLocation() as {
-    state?: { me?: Turn; snapshot?: RoomState };
-  };
+  const { state } = useLocation() as { state?: { me?: Turn; snapshot?: RoomState } };
 
-  // quem eu sou (X/O). Pode vir da navegação ou ser definido por eventos após entrar.
   const [me, setMe] = useState<Turn | "">((state?.me as Turn) || "");
-  // estado da sala. Tenta iniciar com snapshot; se não vier, buscamos por HTTP.
   const [s, setS] = useState<RoomState | null>(state?.snapshot ?? null);
   const [ended, setEnded] = useState<"" | "x_won" | "o_won" | "draw">("");
   const [error, setError] = useState<string>("");
   const [toast, setToast] = useState<string>("");
 
-  // Conecta eventos do socket
   useEffect(() => {
     const sock = getSocket();
 
     const onState = (st: RoomState) => setS(st);
     const onJoined = (m: { assigned: Turn }) => setMe(m.assigned);
     const onCreated = (m: { assigned: Turn }) => setMe(m.assigned);
-    const onOver = (m: { status: "x_won" | "o_won" | "draw" }) =>
-      setEnded(m.status);
-    const onErr = (e: { code: string; message: string }) =>
-      setError(e.message || e.code);
+    const onOver = (m: { status: "x_won" | "o_won" | "draw" }) => setEnded(m.status);
+    const onErr = (e: { code: string; message: string }) => setError(e.message || e.code);
+
+    const onIllegal = (e: { code: string; [k: string]: any }) => {
+      const msg =
+        e?.code === "NOT_YOUR_TURN" ? "Não é a sua vez" :
+        e?.code === "CELL_OCCUPIED" ? "Célula já ocupada" :
+        e?.code === "INDEX_INVALID" ? "Posição inválida" :
+        e?.code === "GAME_NOT_ACTIVE" ? "Partida não está ativa" :
+        e?.code === "ROOM_NOT_FOUND" ? "Sala não encontrada" :
+        "Jogada inválida";
+      setToast(msg);
+    };
 
     sock.on("room_state", onState);
     sock.on("room_joined", onJoined);
     sock.on("room_created", onCreated);
     sock.on("game_over", onOver);
     sock.on("ws_error", onErr);
+    sock.on("illegal_move", onIllegal);
 
-    // opcional: acorda a conexão
     sock.emit("ping");
 
     return () => {
@@ -44,10 +48,10 @@ export default function Game() {
       sock.off("room_created", onCreated);
       sock.off("game_over", onOver);
       sock.off("ws_error", onErr);
+      sock.off("illegal_move", onIllegal);
     };
   }, []);
 
-  // Fallback por HTTP caso entre direto no /game/:roomId (sem snapshot)
   useEffect(() => {
     if (!s && roomId) {
       fetch(`${import.meta.env.VITE_BACKEND_URL}/api/rooms/${roomId}`)
@@ -56,43 +60,47 @@ export default function Game() {
           const data: RoomState = await r.json();
           setS(data);
         })
-        .catch(() => {
-          /* silencioso */
-        });
+        .catch(() => {});
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [roomId]);
+  }, [roomId, s]);
 
-  // Label de status
   const label = useMemo(() => {
     if (!s) return "Conectando…";
-    if (ended)
-      return ended === "draw"
-        ? "Empate!"
-        : ended === "x_won"
-        ? "X venceu!"
-        : "O venceu!";
+    if (ended) return ended === "draw" ? "Empate!" : ended === "x_won" ? "X venceu!" : "O venceu!";
     if (s.status === "waiting") return "Aguardando jogador…";
     if (s.status === "active") return `Vez de ${s.turn}`;
     return s.status;
   }, [s, ended]);
 
-  // Jogar
   const play = (i: number) => {
-    if (!s || s.status !== "active") return;
-    if (me === "" || s.turn !== me) return; // não é minha vez
-    if (s.board[i] !== "") return; // célula ocupada
+    if (!s) return;
+
+    if (s.status !== "active") {
+      setToast("Partida não está ativa");
+      return;
+    }
+    if (me === "") {
+      setToast("Jogador não identificado");
+      return;
+    }
+    if (s.turn !== me) {
+      setToast("Não é a sua vez");
+      return;
+    }
+    if (s.board[i] !== "") {
+      setToast("Célula já ocupada");
+      return;
+    }
+
     getSocket().emit("make_move", { roomId, index: i });
   };
 
-  // Reiniciar
   const restart = () => {
     if (!roomId) return;
     setEnded("");
     getSocket().emit("restart", { roomId });
   };
 
-  // Copiar roomId
   const copyRoomId = async () => {
     try {
       await navigator.clipboard.writeText(s?.room_id || roomId);
@@ -102,7 +110,6 @@ export default function Game() {
     }
   };
 
-  // Mini “toast” simples para erros
   useEffect(() => {
     if (!error) return;
     const t = setTimeout(() => setError(""), 2500);
@@ -128,6 +135,7 @@ export default function Game() {
   return (
     <div className="min-h-screen flex flex-col items-center gap-4 p-6">
       <h2 className="text-2xl font-bold">Sala {s.room_id}</h2>
+
       <div className="flex items-center gap-2">
         <div className="text-sm opacity-70">
           Sala: <b>{s.room_id}</b>
@@ -142,20 +150,20 @@ export default function Game() {
       </div>
 
       <div className="text-sm opacity-70">
-        X: {s.player1_name ?? "?"} • O: {s.player2_name ?? "?"} • Você:{" "}
-        {me || "?"}
+        X: {s.player1_name ?? "?"} • O: {s.player2_name ?? "?"} • Você: {me || "?"}
       </div>
 
-      {/* Board */}
+      {/* Board — sem disabled, apenas visual/aria-disabled para exibir toasts */}
       <div className={`grid grid-cols-3 gap-2 ${myTurn ? "" : "opacity-90"}`}>
         {s.board.map((c: Cell, i: number) => {
-          const disabled = c !== "" || s.status !== "active" || s.turn !== me;
+          const blocked = c !== "" || s.status !== "active" || s.turn !== me;
           return (
             <button
               key={i}
               onClick={() => play(i)}
-              disabled={disabled}
-              className="w-24 h-24 text-4xl font-bold border rounded flex items-center justify-center disabled:opacity-60"
+              aria-disabled={blocked}
+              className={`w-24 h-24 text-4xl font-bold border rounded flex items-center justify-center
+                ${blocked ? "opacity-60 cursor-not-allowed" : "hover:bg-gray-50"}`}
             >
               {c}
             </button>
@@ -171,13 +179,14 @@ export default function Game() {
         </button>
       </div>
 
+      {/* Toasts */}
       {error && (
-        <div className="fixed bottom-4 left-1/2 -translate-x-1/2 bg-red-600 text-white px-4 py-2 rounded shadow">
+        <div className="fixed bottom-4 left-1/2 -translate-x-1/2 z-50 bg-red-600 text-white px-4 py-2 rounded shadow">
           {error}
         </div>
       )}
       {toast && (
-        <div className="fixed bottom-4 left-1/2 -translate-x-1/2 bg-black text-white px-4 py-2 rounded shadow">
+        <div className="fixed bottom-4 left-1/2 -translate-x-1/2 z-50 bg-black text-white px-4 py-2 rounded shadow">
           {toast}
         </div>
       )}
