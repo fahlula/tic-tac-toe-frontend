@@ -10,23 +10,36 @@ export default function Lobby() {
 
   useEffect(() => {
     const s = getSocket();
+
     const onWsError = (e: { code: string; message: string }) => {
       setCreating(false);
       setError(e.message || e.code);
     };
+
     s.on("ws_error", onWsError);
-    return () => { s.off("ws_error", onWsError); };
+    return () => {
+      s.off("ws_error", onWsError);
+    };
   }, []);
 
   const createRoom = () => {
     setError("");
     setCreating(true);
+
     const s = getSocket();
+
     s.once("room_created", (m) => {
       setCreating(false);
-      // navega para a tela do jogo com o roomId
-      nav(`/game/${m.roomId}`, { replace: true, state: { me: m.assigned } });
+      // ✅ envia também o snapshot inicial da sala (m.state)
+      nav(`/game/${m.roomId}`, {
+        replace: true,
+        state: { me: m.assigned, snapshot: m.state },
+      });
     });
+
+    // opcional: em caso de resposta muito rápida, garantir que não fique preso
+    s.once("room_state", () => setCreating(false));
+
     s.emit("create_room", { playerName: name || "Player 1" });
   };
 
@@ -49,14 +62,9 @@ export default function Lobby() {
         {creating ? "Criando..." : "Criar sala"}
       </button>
 
-      {error && (
-        <div className="text-red-600 text-sm">{error}</div>
-      )}
+      {error && <div className="text-red-600 text-sm">{error}</div>}
 
-      <button
-        className="px-5 py-2 rounded border"
-        onClick={() => nav("/join")}
-      >
+      <button className="px-5 py-2 rounded border" onClick={() => nav("/join")}>
         Entrar em sala existente
       </button>
     </div>
