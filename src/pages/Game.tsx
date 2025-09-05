@@ -12,11 +12,25 @@ export default function Game() {
   const [ended, setEnded] = useState<"" | "x_won" | "o_won" | "draw">("");
   const [error, setError] = useState<string>("");
   const [toast, setToast] = useState<string>("");
+  const [restarting, setRestarting] = useState(false); // ⭐ novo
 
   useEffect(() => {
     const sock = getSocket();
 
-    const onState = (st: RoomState) => setS(st);
+    const onState = (st: RoomState) => {
+      setS(st);
+
+      // ⭐ se estávamos reiniciando, detecta quando o backend já limpou o board
+      if (restarting) {
+        const boardEmpty = Array.isArray(st.board) && st.board.every((c) => c === "");
+        if (st.status === "active" && boardEmpty) {
+          setRestarting(false);
+          setEnded("");
+          setToast("Partida reiniciada");
+        }
+      }
+    };
+
     const onJoined = (m: { assigned: Turn }) => setMe(m.assigned);
     const onCreated = (m: { assigned: Turn }) => setMe(m.assigned);
     const onOver = (m: { status: "x_won" | "o_won" | "draw" }) => setEnded(m.status);
@@ -50,8 +64,9 @@ export default function Game() {
       sock.off("ws_error", onErr);
       sock.off("illegal_move", onIllegal);
     };
-  }, []);
+  }, [restarting]);
 
+  // Fallback por HTTP caso entre direto no /game/:roomId (sem snapshot)
   useEffect(() => {
     if (!s && roomId) {
       fetch(`${import.meta.env.VITE_BACKEND_URL}/api/rooms/${roomId}`)
@@ -66,15 +81,20 @@ export default function Game() {
 
   const label = useMemo(() => {
     if (!s) return "Conectando…";
+    if (restarting) return "Reiniciando…";
     if (ended) return ended === "draw" ? "Empate!" : ended === "x_won" ? "X venceu!" : "O venceu!";
     if (s.status === "waiting") return "Aguardando jogador…";
     if (s.status === "active") return `Vez de ${s.turn}`;
     return s.status;
-  }, [s, ended]);
+  }, [s, ended, restarting]);
 
   const play = (i: number) => {
     if (!s) return;
 
+    if (restarting) {
+      setToast("Aguarde: reiniciando a partida");
+      return;
+    }
     if (s.status !== "active") {
       setToast("Partida não está ativa");
       return;
@@ -96,9 +116,18 @@ export default function Game() {
   };
 
   const restart = () => {
-    if (!roomId) return;
+    if (!roomId || restarting) return;
+    setRestarting(true);         // ⭐ trava a UI e mostra feedback
     setEnded("");
     getSocket().emit("restart", { roomId });
+
+    // fallback: se nada chegar em 6s, solta o estado e alerta
+    window.setTimeout(() => {
+      if (restarting) {
+        setRestarting(false);
+        setToast("Não foi possível confirmar o reinício. Tente novamente.");
+      }
+    }, 6000);
   };
 
   const copyRoomId = async () => {
@@ -153,10 +182,10 @@ export default function Game() {
         X: {s.player1_name ?? "?"} • O: {s.player2_name ?? "?"} • Você: {me || "?"}
       </div>
 
-      {/* Board — sem disabled, apenas visual/aria-disabled para exibir toasts */}
+      {/* Board — sem disabled para permitir toasts locais */}
       <div className={`grid grid-cols-3 gap-2 ${myTurn ? "" : "opacity-90"}`}>
         {s.board.map((c: Cell, i: number) => {
-          const blocked = c !== "" || s.status !== "active" || s.turn !== me;
+          const blocked = restarting || c !== "" || s.status !== "active" || s.turn !== me;
           return (
             <button
               key={i}
@@ -174,8 +203,11 @@ export default function Game() {
       <div className="text-lg">{label}</div>
 
       <div className="flex gap-2">
-        <button className="px-3 py-2 border rounded" onClick={restart}>
-          Reiniciar
+        <button
+          className={`px-3 py-2 border rounded ${restarting ? "opacity-60 cursor-not-allowed" : ""}`}
+          onClick={restart}
+        >
+          {restarting ? "Reiniciando…" : "Reiniciar"}
         </button>
       </div>
 
