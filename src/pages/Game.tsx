@@ -5,7 +5,9 @@ import type { RoomState, Turn, Cell } from "../services/socket";
 
 export default function Game() {
   const { roomId = "" } = useParams();
-  const { state } = useLocation() as { state?: { me?: Turn; snapshot?: RoomState } };
+  const { state } = useLocation() as {
+    state?: { me?: Turn; snapshot?: RoomState };
+  };
 
   // quem eu sou (X/O). Pode vir da navegação ou ser definido por eventos após entrar.
   const [me, setMe] = useState<Turn | "">((state?.me as Turn) || "");
@@ -13,6 +15,7 @@ export default function Game() {
   const [s, setS] = useState<RoomState | null>(state?.snapshot ?? null);
   const [ended, setEnded] = useState<"" | "x_won" | "o_won" | "draw">("");
   const [error, setError] = useState<string>("");
+  const [toast, setToast] = useState<string>("");
 
   // Conecta eventos do socket
   useEffect(() => {
@@ -21,8 +24,10 @@ export default function Game() {
     const onState = (st: RoomState) => setS(st);
     const onJoined = (m: { assigned: Turn }) => setMe(m.assigned);
     const onCreated = (m: { assigned: Turn }) => setMe(m.assigned);
-    const onOver = (m: { status: "x_won" | "o_won" | "draw" }) => setEnded(m.status);
-    const onErr = (e: { code: string; message: string }) => setError(e.message || e.code);
+    const onOver = (m: { status: "x_won" | "o_won" | "draw" }) =>
+      setEnded(m.status);
+    const onErr = (e: { code: string; message: string }) =>
+      setError(e.message || e.code);
 
     sock.on("room_state", onState);
     sock.on("room_joined", onJoined);
@@ -61,7 +66,12 @@ export default function Game() {
   // Label de status
   const label = useMemo(() => {
     if (!s) return "Conectando…";
-    if (ended) return ended === "draw" ? "Empate!" : ended === "x_won" ? "X venceu!" : "O venceu!";
+    if (ended)
+      return ended === "draw"
+        ? "Empate!"
+        : ended === "x_won"
+        ? "X venceu!"
+        : "O venceu!";
     if (s.status === "waiting") return "Aguardando jogador…";
     if (s.status === "active") return `Vez de ${s.turn}`;
     return s.status;
@@ -82,12 +92,28 @@ export default function Game() {
     getSocket().emit("restart", { roomId });
   };
 
+  // Copiar roomId
+  const copyRoomId = async () => {
+    try {
+      await navigator.clipboard.writeText(s?.room_id || roomId);
+      setToast("Código copiado!");
+    } catch {
+      setToast("Não foi possível copiar");
+    }
+  };
+
   // Mini “toast” simples para erros
   useEffect(() => {
     if (!error) return;
     const t = setTimeout(() => setError(""), 2500);
     return () => clearTimeout(t);
   }, [error]);
+
+  useEffect(() => {
+    if (!toast) return;
+    const t = setTimeout(() => setToast(""), 2000);
+    return () => clearTimeout(t);
+  }, [toast]);
 
   if (!s) {
     return (
@@ -102,9 +128,22 @@ export default function Game() {
   return (
     <div className="min-h-screen flex flex-col items-center gap-4 p-6">
       <h2 className="text-2xl font-bold">Sala {s.room_id}</h2>
+      <div className="flex items-center gap-2">
+        <div className="text-sm opacity-70">
+          Sala: <b>{s.room_id}</b>
+        </div>
+        <button
+          className="px-2 py-1 text-sm border rounded"
+          onClick={copyRoomId}
+          title="Copiar código da sala"
+        >
+          Copiar
+        </button>
+      </div>
 
       <div className="text-sm opacity-70">
-        X: {s.player1_name ?? "?"} • O: {s.player2_name ?? "?"} • Você: {me || "?"}
+        X: {s.player1_name ?? "?"} • O: {s.player2_name ?? "?"} • Você:{" "}
+        {me || "?"}
       </div>
 
       {/* Board */}
@@ -135,6 +174,11 @@ export default function Game() {
       {error && (
         <div className="fixed bottom-4 left-1/2 -translate-x-1/2 bg-red-600 text-white px-4 py-2 rounded shadow">
           {error}
+        </div>
+      )}
+      {toast && (
+        <div className="fixed bottom-4 left-1/2 -translate-x-1/2 bg-black text-white px-4 py-2 rounded shadow">
+          {toast}
         </div>
       )}
     </div>
